@@ -64,7 +64,10 @@ class McpClient:
         )  # Map of tool name to MCP client
         self._available_tools: list[dict[str, Any]] = []  # List of available tools
         self._messages: list[dict[str, Any]] = []  # Conversation history
-        self._http_client = httpx.AsyncClient(timeout=30.0)
+
+        logger.info(
+            "MCP client initialized with no tools. Tools will be added when connecting to MCP servers."
+        )
 
     async def add_mcp_server(
         self, server_params: Union[StdioServerParameters, str]
@@ -102,6 +105,14 @@ class McpClient:
                     f"Connected to MCP server with tools: {[tool.name for tool in tools_result.tools]}"
                 )
 
+                # Print detailed information about each tool
+                logger.info("Available tools from stdio MCP server:")
+                for tool in tools_result.tools:
+                    logger.info(f"  - {tool.name}: {tool.description}")
+                    logger.debug(
+                        f"    Parameters: {json.dumps(tool.input_schema, indent=2)}"
+                    )
+
                 # Add tools to available tools
                 for tool in tools_result.tools:
                     self._mcp_clients[tool.name] = mcp
@@ -116,7 +127,7 @@ class McpClient:
                         }
                     )
         except Exception as e:
-            logger.error(f"Error connecting to MCP server: {e}")
+            logger.error(f"Failed to connect to MCP server: {str(e)}")
             raise
 
     async def add_http_mcp_server(self, server_url: str) -> None:
@@ -128,7 +139,7 @@ class McpClient:
         """
         try:
             # Fetch tools from the server
-            async with self._http_client as client:
+            async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.get(f"{server_url.rstrip('/')}/api/tools")
                 response.raise_for_status()
                 tools_data = response.json()
@@ -136,6 +147,14 @@ class McpClient:
                 logger.info(
                     f"Connected to MCP server with tools: {[tool['name'] for tool in tools_data['tools']]}"
                 )
+
+                # Print detailed information about each tool
+                logger.info("Available tools from HTTP MCP server:")
+                for tool in tools_data["tools"]:
+                    logger.info(f"  - {tool['name']}: {tool['description']}")
+                    logger.debug(
+                        f"    Parameters: {json.dumps(tool['inputSchema'], indent=2)}"
+                    )
 
                 # Add tools to available tools
                 for tool in tools_data["tools"]:
@@ -171,21 +190,51 @@ class McpClient:
         Raises:
             ValueError: If the tool is not found
         """
+        logger.info(f"Invoking tool: {tool_name} with parameters: {kwargs}")
+
         if tool_name not in self._mcp_clients:
-            raise ValueError(f"Tool {tool_name} not found")
+            error_msg = f"Tool {tool_name} not found"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
         tool_info = self._mcp_clients[tool_name]
         if isinstance(tool_info, dict) and "internal_url" in tool_info:
             # External MCP server tool
-            async with self._http_client as client:
-                response = await client.post(tool_info["internal_url"], json=kwargs)
-                response.raise_for_status()
-                return response.json()
+            logger.info(f"Using external MCP server for tool: {tool_name}")
+            try:
+                # Create a new HTTP client for this request
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    endpoint_url = tool_info["internal_url"]
+                    # Extract base URL and path for better logging
+                    parsed_url = httpx.URL(endpoint_url)
+                    base_url = f"{parsed_url.scheme}://{parsed_url.host}"
+                    if parsed_url.port:
+                        base_url = f"{base_url}:{parsed_url.port}"
+
+                    logger.info(f"Making HTTP POST request to MCP server: {base_url}")
+                    logger.info(f"Full endpoint URL: {endpoint_url}")
+                    logger.debug(f"Request payload: {json.dumps(kwargs, indent=2)}")
+
+                    response = await client.post(endpoint_url, json=kwargs)
+                    response.raise_for_status()
+                    result = response.json()
+                    logger.info(f"Tool {tool_name} returned: {result}")
+                    return result
+            except Exception as e:
+                logger.error(f"Error invoking external tool {tool_name}: {str(e)}")
+                raise
         else:
             # Local MCP server tool
-            return await self._execute_with_retry(
-                "invoke_tool", tool_info.invoke_tool, tool_name, kwargs
-            )
+            logger.info(f"Using local MCP server for tool: {tool_name}")
+            try:
+                result = await self._execute_with_retry(
+                    "invoke_tool", tool_info.invoke_tool, tool_name, kwargs
+                )
+                logger.info(f"Tool {tool_name} returned: {result}")
+                return result
+            except Exception as e:
+                logger.error(f"Error invoking local tool {tool_name}: {str(e)}")
+                raise
 
     def get_available_tools(self) -> list[dict[str, Any]]:
         """
@@ -195,6 +244,30 @@ class McpClient:
             list[dict[str, Any]]: A list of available tools.
         """
         return self._available_tools.copy()
+
+    def print_available_tools(self) -> None:
+        """
+        Print all available tools to the log.
+
+        This is useful for debugging and understanding what tools are available.
+        """
+        if not self._available_tools:
+            logger.info("No tools available. Connect to an MCP server first.")
+            return
+
+        logger.info(f"Available tools ({len(self._available_tools)}):")
+        for tool in self._available_tools:
+            if "function" in tool:
+                logger.info(
+                    f"  - {tool['function']['name']}: {tool['function']['description']}"
+                )
+                logger.debug(
+                    f"    Parameters: {json.dumps(tool['function']['parameters'], indent=2)}"
+                )
+            else:
+                logger.info(
+                    f"  - {tool.get('name', 'Unknown')}: {tool.get('description', 'No description')}"
+                )
 
     async def _execute_with_retry(
         self, operation_name: str, operation_func, *args, **kwargs
@@ -282,6 +355,8 @@ class McpClient:
         tool_results = []
 
         if hasattr(message, "tool_calls") and message.tool_calls:
+            logger.info(f"Processing {len(message.tool_calls)} tool calls from LLM")
+
             tool_calls = [
                 {
                     "id": tool_call.id,
@@ -294,40 +369,121 @@ class McpClient:
                 for tool_call in message.tool_calls
             ]
 
+            logger.debug(f"Tool calls: {json.dumps(tool_calls, indent=2)}")
+
             # Execute tools using MCP clients
             for tool_call in tool_calls:
                 try:
                     tool_name = tool_call["function"]["name"]
                     tool_args = json.loads(tool_call["function"]["arguments"])
 
+                    logger.info(
+                        f"LLM requested tool: {tool_name} with arguments: {tool_args}"
+                    )
+
                     # Get the appropriate MCP client for this tool
                     mcp_client = self._mcp_clients.get(tool_name)
                     if mcp_client:
-                        result = await mcp_client.call_tool(
-                            {"name": tool_name, "arguments": tool_args}
-                        )
-                        tool_results.append(
-                            {
-                                "tool_call_id": tool_call["id"],
-                                "role": "tool",
-                                "name": tool_name,
-                                "content": result.content[0].text,
-                            }
-                        )
+                        logger.info(f"Found MCP client for tool: {tool_name}")
+
+                        if (
+                            isinstance(mcp_client, dict)
+                            and "internal_url" in mcp_client
+                        ):
+                            # External MCP server tool
+                            logger.info(
+                                f"Using external MCP server for tool: {tool_name}"
+                            )
+                            try:
+                                async with httpx.AsyncClient(timeout=30.0) as client:
+                                    endpoint_url = mcp_client["internal_url"]
+                                    # Extract base URL and path for better logging
+                                    parsed_url = httpx.URL(endpoint_url)
+                                    base_url = (
+                                        f"{parsed_url.scheme}://{parsed_url.host}"
+                                    )
+                                    if parsed_url.port:
+                                        base_url = f"{base_url}:{parsed_url.port}"
+
+                                    logger.info(
+                                        f"Making HTTP POST request to MCP server: {base_url}"
+                                    )
+                                    logger.info(f"Full endpoint URL: {endpoint_url}")
+                                    logger.debug(
+                                        f"Request payload: {json.dumps(tool_args, indent=2)}"
+                                    )
+
+                                    response = await client.post(
+                                        endpoint_url, json=tool_args
+                                    )
+                                    response.raise_for_status()
+                                    result = response.json()
+                                    logger.info(f"Tool {tool_name} returned: {result}")
+
+                                    tool_results.append(
+                                        {
+                                            "tool_call_id": tool_call["id"],
+                                            "role": "tool",
+                                            "name": tool_name,
+                                            "content": str(result),
+                                        }
+                                    )
+                            except Exception as e:
+                                error_msg = f"Error invoking external tool {tool_name}: {str(e)}"
+                                logger.error(error_msg)
+                                tool_results.append(
+                                    {
+                                        "tool_call_id": tool_call["id"],
+                                        "role": "tool",
+                                        "name": tool_name,
+                                        "content": f"Error: {str(e)}",
+                                    }
+                                )
+                        else:
+                            # Local MCP server tool
+                            try:
+                                result = await mcp_client.call_tool(
+                                    {"name": tool_name, "arguments": tool_args}
+                                )
+                                logger.info(f"Tool {tool_name} returned: {result}")
+
+                                tool_results.append(
+                                    {
+                                        "tool_call_id": tool_call["id"],
+                                        "role": "tool",
+                                        "name": tool_name,
+                                        "content": result.content[0].text,
+                                    }
+                                )
+                            except Exception as e:
+                                error_msg = (
+                                    f"Error invoking local tool {tool_name}: {str(e)}"
+                                )
+                                logger.error(error_msg)
+                                tool_results.append(
+                                    {
+                                        "tool_call_id": tool_call["id"],
+                                        "role": "tool",
+                                        "name": tool_name,
+                                        "content": f"Error: {str(e)}",
+                                    }
+                                )
                     else:
-                        logger.error(f"No MCP client found for tool: {tool_name}")
+                        error_msg = f"No MCP client found for tool: {tool_name}"
+                        logger.error(error_msg)
                         tool_results.append(
                             {
                                 "tool_call_id": tool_call["id"],
                                 "role": "tool",
                                 "name": tool_name,
-                                "content": f"Error: No MCP client found for tool: {tool_name}",
+                                "content": f"Error: {error_msg}",
                             }
                         )
                 except Exception as e:
-                    logger.error(
+                    error_msg = (
                         f"Error executing tool {tool_call['function']['name']}: {e}"
                     )
+                    logger.error(error_msg)
                     tool_results.append(
                         {
                             "tool_call_id": tool_call["id"],
@@ -346,6 +502,10 @@ class McpClient:
             # Add tool results to messages
             for result in tool_results:
                 updated_messages.append(result)
+
+            logger.info(
+                f"Processed {len(tool_calls)} tool calls with {len(tool_results)} results"
+            )
 
             return tool_calls, tool_results, updated_messages
 
@@ -439,6 +599,10 @@ class McpClient:
             "Content-Type": "application/json; charset=utf-8",
             **(extra_headers or {}),
         }
+
+        # Print available tools at the beginning
+        logger.info("Starting agent with the following tools:")
+        self.print_available_tools()
 
         # Determine if we're using structured parsing or chat completion
         is_structured_parse = False
@@ -545,6 +709,10 @@ class McpClient:
             "Content-Type": "application/json; charset=utf-8",
             **(extra_headers or {}),
         }
+
+        # Print available tools at the beginning
+        logger.info("Starting streaming agent with the following tools:")
+        self.print_available_tools()
 
         # Determine if we're using structured parsing or chat completion
         is_structured_parse = False
