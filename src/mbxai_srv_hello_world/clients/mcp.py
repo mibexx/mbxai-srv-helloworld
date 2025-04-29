@@ -201,10 +201,10 @@ class McpClient:
         if isinstance(tool_info, dict) and "internal_url" in tool_info:
             # External MCP server tool
             logger.info(f"Using external MCP server for tool: {tool_name}")
+            endpoint_url = tool_info["internal_url"]
             try:
                 # Create a new HTTP client for this request
                 async with httpx.AsyncClient(timeout=30.0) as client:
-                    endpoint_url = tool_info["internal_url"]
                     # Extract base URL and path for better logging
                     parsed_url = httpx.URL(endpoint_url)
                     base_url = f"{parsed_url.scheme}://{parsed_url.host}"
@@ -397,9 +397,9 @@ class McpClient:
                             logger.info(
                                 f"Using external MCP server for tool: {tool_name}"
                             )
+                            endpoint_url = mcp_client["internal_url"]
                             try:
                                 async with httpx.AsyncClient(timeout=30.0) as client:
-                                    endpoint_url = mcp_client["internal_url"]
                                     # Extract base URL and path for better logging
                                     parsed_url = httpx.URL(endpoint_url)
                                     base_url = (
