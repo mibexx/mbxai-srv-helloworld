@@ -1,0 +1,17 @@
+version: "3"
+
+services:
+  service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "5000:5000"
+    environment:
+      - "MBXAI_SRV_HELLO_WORLD_NAME=MBXAI SRV Hello World"
+      - "MBXAI_SRV_HELLO_WORLD_LOG_LEVEL=20"
+      - "MBXAI_SRV_HELLO_WORLD_OPENROUTER_API_KEY=${OPENROUTER_API_KEY}"
+      - "MBXAI_SRV_HELLO_WORLD_OPENROUTER_BASE_URL=https://openrouter.ai/api/v1"
+    volumes:
+      - ./src:/app/src
+    restart: unless-stopped

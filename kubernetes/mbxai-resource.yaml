@@ -1,0 +1,19 @@
+apiVersion: mbxai.cloud/v1
+kind: MbxAiResource
+metadata:
+  name: "mbxai_srv_hello_world"
+  namespace: mbxai-sandbox
+spec:
+  name: "MBXAI SRV Hello World"
+  repoUrl: "https://github.com/mibexx/mbxai_srv_hello_world"
+  key: "mbxai_srv_hello_world-key"
+  baseImage: "mibexx/mbxai-service:latest"
+  port: 5000
+  expose: false
+  runCommand: ["service"]
+  customEnvVars:
+    - "MBXAI_SRV_HELLO_WORLD_NAME": "MBXAI SRV Hello World"
+    - "MBXAI_SRV_HELLO_WORLD_LOG_LEVEL": "INFO"
+  customSecrets:
+    - "MBXAI_SRV_HELLO_WORLD_OPENROUTER_API_KEY": "your-openrouter-api-key"
+    - "MBXAI_SRV_HELLO_WORLD_OPENROUTER_BASE_URL": "https://openrouter.ai/api/v1"
