@@ -222,6 +222,8 @@ class McpClient:
                     return result
             except Exception as e:
                 logger.error(f"Error invoking external tool {tool_name}: {str(e)}")
+                logger.error(f"Request URL: {endpoint_url}")
+                logger.error(f"Request body: {json.dumps(kwargs, indent=2)}")
                 raise
         else:
             # Local MCP server tool
@@ -234,6 +236,7 @@ class McpClient:
                 return result
             except Exception as e:
                 logger.error(f"Error invoking local tool {tool_name}: {str(e)}")
+                logger.error(f"Request body: {json.dumps(kwargs, indent=2)}")
                 raise
 
     def get_available_tools(self) -> list[dict[str, Any]]:
@@ -431,6 +434,10 @@ class McpClient:
                             except Exception as e:
                                 error_msg = f"Error invoking external tool {tool_name}: {str(e)}"
                                 logger.error(error_msg)
+                                logger.error(f"Request URL: {endpoint_url}")
+                                logger.error(
+                                    f"Request body: {json.dumps(tool_args, indent=2)}"
+                                )
                                 tool_results.append(
                                     {
                                         "tool_call_id": tool_call["id"],
